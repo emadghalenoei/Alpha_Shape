@@ -30,7 +30,6 @@ from death_ART import death_ART
 from move_ART import move_ART
 from Imshow_BestChain import Imshow_BestChain
 from datetime import datetime
-from shapely.geometry import Point
 from scipy.signal import lfilter
 
 
@@ -46,7 +45,7 @@ Ndatapoints = 30         # Number of total data in 1D array shape
 CX = 100                 # must be dividable by downsample rate of x 
 CZ = 100                 # must be dividable by downsample rate of z
 
-pnt = [None] * CX*CZ
+XnZn = np.zeros(CX*CZ)
 dg_obs = np.zeros(Ndatapoints,dtype=float)
 dT_obs = np.zeros(Ndatapoints,dtype=float)
 Kernel_Grv = np.zeros((Ndatapoints,CX*CZ))
@@ -54,9 +53,6 @@ Kernel_Mag = np.zeros((Ndatapoints,CX*CZ))
 globals_par = np.zeros((6,2))
 globals_xyz = np.zeros((2,2))
 AR_bounds = np.zeros((4,2))
-
-Xn_Grid = np.zeros((CZ,CX))
-Zn_Grid = np.zeros((CZ,CX))
 
 Kmin = 6
 Kmax = 50
@@ -67,7 +63,6 @@ Chain = np.zeros(6+2*KmaxAR+Kmax*3)
 NT1 = int(np.floor((Nchain+1)/2))           # number of chains with T=1
 dt = 1.2                                # ratio between temperature levels
 TempLevels=np.arange(Nchain-NT1,0,-1)   # define Temp Levels
-DT = pow(dt,TempLevels)
 Temp = np.hstack((pow(dt,TempLevels),np.ones(NT1)))
 
 NKEEP = 1000          # dump a binary file to desk every NKEEP records
@@ -77,7 +72,7 @@ NMCMC = 100000*NKEEP   #number of random walks
 
 if rank == 0:
     
-    loaddesk = 0
+    loaddesk = 1
 
     fpath_loaddesk = os.getcwd()+'/loaddesk'
     
@@ -102,6 +97,7 @@ if rank == 0:
         
     if loaddesk == 1:
         ChainAll = np.load(fpath_loaddesk+'//'+'ChainAll.npy') # use this, if the latest result exists
+#         ChainAll[:10] = ChainAll[-10:]
         
     
     Gravity_Data = np.loadtxt('GRV_Profile.txt')
@@ -152,12 +148,10 @@ if rank == 0:
     Xn_Grid = np.divide(DISMODEL-dis_min,dis_max-dis_min)
     Zn_Grid = np.divide(Z-z_min,z_max-z_min)
     
+    Xn = Xn_Grid.flatten('F')
+    Zn = Zn_Grid.flatten('F')
+    XnZn = np.column_stack((Xn,Zn))
     
-    c = 0
-    for j in np.arange(CX):
-          for i in np.arange(CZ):
-                pnt[c] = [Point(Xn_Grid[i,j], Zn_Grid[i,j])]
-                c += 1
 
     #[TrueDensityModel, TrueSUSModel] = Model_Making(Xn_Grid,Zn_Grid)
     
@@ -181,27 +175,27 @@ if rank == 0:
    # Adding noise
 
     AR_parameters_original_g = np.array([0.6,-0.5])
-    noise_g_level = 0.04
+    noise_g_level = 0.08
     sigma_g_original=noise_g_level*max(abs(dg_true))
     uncorr_noise_g_original = sigma_g_original*np.random.randn(Ndatapoints)
     corr_noise_g_original = lfilter(np.atleast_1d(1),np.insert(-AR_parameters_original_g, 0, 1), uncorr_noise_g_original)   
     dg_obs = dg_true + corr_noise_g_original
     
     
-    #if loaddesk == 1:
-    dg_obs = np.load(fpath_loaddesk+'//'+'dg_obs.npy') # use this, if the latest result exists 
+    if loaddesk == 1:
+        dg_obs = np.load(fpath_loaddesk+'//'+'dg_obs_08.npy') # use this, if the latest result exists 
         
     
     AR_parameters_original_T = np.array([0.])
-    noise_T_level = 0.02
+    noise_T_level = 0.04
     sigma_T_original=noise_T_level*max(abs(dT_true))
     uncorr_noise_T_original = sigma_T_original*np.random.randn(Ndatapoints)
     corr_noise_T_original = lfilter(np.atleast_1d(1),np.insert(-AR_parameters_original_T, 0, 1), uncorr_noise_T_original)    
     dT_obs = dT_true + corr_noise_T_original 
     
     
-    #if loaddesk == 1:
-    dT_obs = np.load(fpath_loaddesk+'//'+'dT_obs.npy') # use this, if the latest result exists 
+    if loaddesk == 1:
+        dT_obs = np.load(fpath_loaddesk+'//'+'dT_obs_04.npy') # use this, if the latest result exists 
         
     
     
@@ -210,9 +204,9 @@ if rank == 0:
     rho_base_min = 0.2
     rho_base_max = 0.4
     sus_base_max = rho_base_max/50
-    zn_min = 0.35
-    alpha_min = 0.2
-    alpha_max = 10.
+    zn_min = 0/z_max
+    alpha_min = 1.
+    alpha_max = 6.
     
     globals_par = np.matrix([[Kmin, Kmax], [rho_salt_min, rho_salt_max], [rho_base_min, rho_base_max], [KminAR, KmaxAR], [zn_min, sus_base_max], [alpha_min, alpha_max]])
     globals_xyz = np.matrix([[dis_min, dis_max], [z_min, z_max]])
@@ -220,15 +214,26 @@ if rank == 0:
     AR_bounds =  np.matrix([[0., 0.], [-0.85, 0.9], [-0.85, 0.1], [-0.25, 0.25]]) # AR0, AR1, AR2, AR3
     
     for ichain in np.arange(1,Nchain+1): #sources (ranks) 1,2,...,Nchain
-        if loaddesk == 0:
-            Chain = Initializing(Chain,pnt,Xn_Grid,Zn_Grid,globals_par,Kernel_Grv,Kernel_Mag,dg_obs,dT_obs,CX,CZ).copy()
+        
+        Chain[:] = 0.
+        
+#         ind = np.argsort(ChainAll[:,0])[::-1]
+        #Chain_MaxL = ChainAll[ind[0]].copy()
+        Chain_MaxL = ChainAll[ichain-1,:]
+        
+        if ichain <=9:
+            loaddesk = 1
         else:
-            Chain = ChainAll[ichain-1,:] # use this, if the latest result exists
+            loaddesk = 1
+            
+        Chain = Initializing(Chain,XnZn,globals_par,Kernel_Grv,Kernel_Mag,dg_obs,dT_obs,Chain_MaxL,loaddesk).copy()
+
             
         comm.Send(Chain, dest=ichain, tag=ichain)
     # investigate seed lator --> generate int number == workers
     
     # Save important arrays for posterior process
+    ChainAll = np.zeros((Nchain,Chain.size))
     ChainAll_str = fpath_Restart+'//'+'ChainAll.npy'
     np.save(ChainAll_str, ChainAll)
     
@@ -237,15 +242,9 @@ if rank == 0:
     
     dT_obs_str = fpath_Restart+'//'+'dT_obs.npy'
     np.save(dT_obs_str, dT_obs)
-    
-#     pnt_str = fpath_Restart+'//'+'pnt.npy'
-#     np.save(pnt_str, pnt)
 
-    Xn_Grid_str = fpath_Restart+'//'+'Xn_Grid.npy'
-    np.save(Xn_Grid_str, Xn_Grid)
-
-    Zn_Grid_str = fpath_Restart+'//'+'Zn_Grid.npy'
-    np.save(Zn_Grid_str, Zn_Grid)
+    XnZn_str = fpath_Restart+'//'+'XnZn.npy'
+    np.save(XnZn_str, XnZn)
     
     Kernel_Grv_str = fpath_Restart+'//'+'Kernel_Grv.npy'
     np.save(Kernel_Grv_str, Kernel_Grv)
@@ -283,9 +282,7 @@ if rank == 0:
 if rank>0:
     comm.Recv(Chain, source=0, tag=rank)
 
-pnt = comm.bcast(pnt, root=0)  
-Xn_Grid = comm.bcast(Xn_Grid, root=0)  
-Zn_Grid = comm.bcast(Zn_Grid, root=0)  
+XnZn = comm.bcast(XnZn, root=0) 
 dg_obs = comm.bcast(dg_obs, root=0)
 dT_obs = comm.bcast(dT_obs, root=0)
 Kernel_Grv = comm.bcast(Kernel_Grv, root=0)
@@ -323,16 +320,16 @@ if rank > 0:
                 step = select_step(globals_par[0,0],globals_par[0,1],np.size(xc),bk_Nodes)
         
                 if step==91:
-                    [LogLc,xc,zc,rhoc] = birth(Xn_Grid,Zn_Grid,pnt,globals_par,LogLc,ZLc,
-                                               xc,zc,rhoc,alpha_c,ARgc,ARTc,T,Kernel_Grv,Kernel_Mag,dg_obs,dT_obs,CX,CZ)
+                    [LogLc,xc,zc,rhoc] = birth(XnZn,globals_par,LogLc,ZLc,
+                                               xc,zc,rhoc,alpha_c,ARgc,ARTc,T,Kernel_Grv,Kernel_Mag,dg_obs,dT_obs)
                 elif step==92:
-                    [LogLc,xc,zc,rhoc] = death(Xn_Grid,Zn_Grid,pnt,LogLc,
-                                               xc,zc,rhoc,alpha_c,ARgc,ARTc,T,Kernel_Grv,Kernel_Mag,dg_obs,dT_obs,CX,CZ)
+                    [LogLc,xc,zc,rhoc] = death(XnZn,LogLc,
+                                               xc,zc,rhoc,alpha_c,ARgc,ARTc,T,Kernel_Grv,Kernel_Mag,dg_obs,dT_obs)
                 else:
-                    [LogLc,ZLc,xc,zc,rhoc,alpha_c] = move(Xn_Grid,Zn_Grid,pnt,globals_par,LogLc,ZLc,
-                                                  xc,zc,rhoc,alpha_c,ARgc,ARTc,T,Kernel_Grv,Kernel_Mag,dg_obs,dT_obs,CX,CZ)
+                    [LogLc,ZLc,xc,zc,rhoc,alpha_c] = move(XnZn,globals_par,LogLc,ZLc,
+                                                  xc,zc,rhoc,alpha_c,ARgc,ARTc,T,Kernel_Grv,Kernel_Mag,dg_obs,dT_obs)
         
-        elif imcmc>20000 and imcmc % 4 == 0:
+        elif imcmc>5000 and imcmc % 4 == 0:
             
             if ARgc[0] == 0:
                 step = 91
@@ -340,14 +337,14 @@ if rank > 0:
                 step = select_step(globals_par[3,0],globals_par[3,1],np.size(ARgc),bk_AR)
 
             if step==91:
-                [LogLc,ARgc] = birth_ARg(Xn_Grid,Zn_Grid,pnt,AR_bounds,LogLc,
-                                         xc,zc,rhoc,alpha_c,ARgc,ARTc,T,Kernel_Grv,Kernel_Mag,dg_obs,dT_obs,bk_AR,CX,CZ)
+                [LogLc,ARgc] = birth_ARg(XnZn,AR_bounds,LogLc,
+                                         xc,zc,rhoc,alpha_c,ARgc,ARTc,T,Kernel_Grv,Kernel_Mag,dg_obs,dT_obs,bk_AR)
             elif step==92:
-                [LogLc,ARgc] = death_ARg(Xn_Grid,Zn_Grid,pnt,LogLc,
-                                         xc,zc,rhoc,alpha_c,ARgc,ARTc,T,Kernel_Grv,Kernel_Mag,dg_obs,dT_obs,bk_AR,CX,CZ)
+                [LogLc,ARgc] = death_ARg(XnZn,LogLc,
+                                         xc,zc,rhoc,alpha_c,ARgc,ARTc,T,Kernel_Grv,Kernel_Mag,dg_obs,dT_obs,bk_AR)
             else:
-                [LogLc,ARgc] = move_ARg(Xn_Grid,Zn_Grid,pnt,AR_bounds,LogLc,
-                                        xc,zc,rhoc,alpha_c,ARgc,ARTc,T,Kernel_Grv,Kernel_Mag,dg_obs,dT_obs,CX,CZ)
+                [LogLc,ARgc] = move_ARg(XnZn,AR_bounds,LogLc,
+                                        xc,zc,rhoc,alpha_c,ARgc,ARTc,T,Kernel_Grv,Kernel_Mag,dg_obs,dT_obs)
                 
                 
             if ARTc[0] == 0:
@@ -356,14 +353,14 @@ if rank > 0:
                 step = select_step(globals_par[3,0],globals_par[3,1],np.size(ARTc),bk_AR)
 
             if step==91:
-                [LogLc,ARTc] = birth_ART(Xn_Grid,Zn_Grid,pnt,AR_bounds,LogLc,
-                                         xc,zc,rhoc,alpha_c,ARgc,ARTc,T,Kernel_Grv,Kernel_Mag,dg_obs,dT_obs,bk_AR,CX,CZ)
+                [LogLc,ARTc] = birth_ART(XnZn,AR_bounds,LogLc,
+                                         xc,zc,rhoc,alpha_c,ARgc,ARTc,T,Kernel_Grv,Kernel_Mag,dg_obs,dT_obs,bk_AR)
             elif step==92:
-                [LogLc,ARTc] = death_ART(Xn_Grid,Zn_Grid,pnt,LogLc,
-                                         xc,zc,rhoc,alpha_c,ARgc,ARTc,T,Kernel_Grv,Kernel_Mag,dg_obs,dT_obs,bk_AR,CX,CZ)
+                [LogLc,ARTc] = death_ART(XnZn,LogLc,
+                                         xc,zc,rhoc,alpha_c,ARgc,ARTc,T,Kernel_Grv,Kernel_Mag,dg_obs,dT_obs,bk_AR)
             else:
-                [LogLc,ARTc] = move_ART(Xn_Grid,Zn_Grid,pnt,AR_bounds,LogLc,
-                                        xc,zc,rhoc,alpha_c,ARgc,ARTc,T,Kernel_Grv,Kernel_Mag,dg_obs,dT_obs,CX,CZ)
+                [LogLc,ARTc] = move_ART(XnZn,AR_bounds,LogLc,
+                                        xc,zc,rhoc,alpha_c,ARgc,ARTc,T,Kernel_Grv,Kernel_Mag,dg_obs,dT_obs)
                 
         
         Chain[:] = 0.
@@ -451,12 +448,11 @@ else:
 
                 np.save(ChainAll_str, ChainAll)
                 
-
                 c += 1
-                if c % 10 == 0:
-                    np.save(ChainAll_str, ChainAll)
-                   # Imshow_BestChain(dis_min/1000,dis_max/1000,z_min/1000,z_max/1000,Xn_Grid,Zn_Grid,pnt,
-                       #              CX,CZ,globals_par,ChainAll,fpath_PDF,'MaxLG_',c)
+                if c % 100 == 0:
+                    
+                    Imshow_BestChain(dis_min/1000,dis_max/1000,z_min/1000,z_max/1000,XnZn,
+                                    CX,CZ,globals_par,ChainAll,fpath_PDF,'MaxLG_',c)
                 
                # Imshow_BestChain(0,1,0,1,Xn_Grid,Zn_Grid,pnt,CX,CZ,globals_par,ChainKeep,fpath_PDF,'MaxLG_',imcmc)
 
