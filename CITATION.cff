@@ -4,7 +4,7 @@ authors:
 - family-names: "Ghalenoei"
   given-names: "Emad"
   orcid: "https://orcid.org/0000-0003-0065-0954"
-title: "Joint Gravity Magnetic Inversion with Alpha Shapes"
+title: "Alpha Shapes for Joint Gravity Magnetic Inversion"
 version: 0.0.1
 doi: 10.5281/zenodo.6607741
 date-released: 2022-06-02
